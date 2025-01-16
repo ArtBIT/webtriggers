@@ -80,6 +80,8 @@ process_entry() {
         [[ "$value" == "$old_value" ]] && return
     fi
 
+    echo "$value" > "$cache_file"
+
     if evaluate_condition "$value" "$condition"; then
         local formatted_message="${message//\{\{value\}\}/$value}"
         IFS=',' read -ra handlers <<< "$handler"
@@ -91,9 +93,10 @@ process_entry() {
                 *) log_message "Unknown handler '$h' for $url" ;;
             esac
         done
+        return 0
     fi
+    return 1
 
-    echo "$value" > "$cache_file"
 }
 
 convert_to_seconds() {
@@ -115,7 +118,7 @@ convert_to_seconds() {
 }
 
 run_checks() {
-    local url selector condition interval message handler
+    local url selector condition interval message handler limit
 
     while read -r line; do
         line="${line%%#*}" # Remove comments
@@ -124,13 +127,20 @@ run_checks() {
             "querySelector:"*) selector=$(trim "${line#querySelector: }");;
             "condition:"*) condition=$(trim "${line#condition: }") ;;
             "interval:"*) interval=$(trim "${line#interval: }") ;;
+            "limit"*) limit=$(trim "${line#limit: }") ;;
             "message:"*) message=$(trim "${line#message: }") ;;
             "handler:"*) handler="${line#handler: }" ;;
             "") # Execute the entry
                 if [[ -n "$url" && -n "$selector" && -n "$condition" && -n "$interval" && -n "$message" ]]; then
                     while true; do
                         process_entry "$url" "$selector" "$condition" "$message" "$handler"
-                        sleep $(convert_to_seconds "$interval")
+                        if $? -eq 0 && [[ -n "$limit" ]]; then
+                            # if entry condition was met and a limit is specified, sleep for the limit duration
+                            # this way you can say, check for condition every 5s, but only execute the action once every 5 minutes
+                            sleep $(convert_to_seconds "$limit")
+                        else
+                            sleep $(convert_to_seconds "$interval")
+                        fi
                     done &
                     bg_pids+=($!) # Add the process ID to the list
                 fi
@@ -162,6 +172,6 @@ webtriggers() {
     run_checks
     wait
 }
-trap cleanup SIGINT SIGTERM
+
 webtriggers
 
